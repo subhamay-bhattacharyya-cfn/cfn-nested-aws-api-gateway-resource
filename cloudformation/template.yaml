@@ -52,7 +52,7 @@ Parameters:
     Default: "orders"
     MinLength: 1
     MaxLength: 256
-    AllowedPattern: "^[a-zA-Z0-9._-]+$"
+    AllowedPattern: "^[a-zA-Z0-9._{}-]+$"
     ConstraintDescription: "Path part must be 1-256 characters and can only contain letters, numbers, periods, underscores, and hyphens"
     Description: "Path segment created under the REST API root resource"
 
@@ -135,7 +135,7 @@ Outputs:
   RestApiResourceId:
     Description: "ID of the path resource created by PathPart"
     Value: !Ref RestApiResource
-    
+
   RestApiRootResourceId:
     Description: "Parent resource ID the path resource was created under (root resource ID for CI builds)"
     Value: !If [IsCiBuild, !GetAtt RestApi.RootResourceId, !Ref ParentId]
