@@ -4,44 +4,37 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-This is a **CloudFormation template repository** that provides reusable nested stack templates for deploying S3 buckets with security best practices. Templates follow the nested stack pattern and are designed to be referenced by parent CloudFormation stacks.
+This is a **CloudFormation template repository** that provides a reusable nested stack template for creating a path resource on an Amazon API Gateway REST API. The template is designed to be referenced by parent CloudFormation stacks.
 
 **Key characteristics:**
 
-- Nested CloudFormation templates (referenced via `TemplateURL`)
-- Parameterized bucket naming with account ID, environment, and region
-- S3 security defaults: versioning enabled, public access blocked
-- Optional S3 bucket policy enforcement (encryption, secure transport)
+- Nested CloudFormation template (referenced via `TemplateURL`)
+- CI builds (non-empty `CiSuffix`) create the REST API (regional endpoint, hardcoded)
+- Non-CI runs attach the path resource to an existing REST API via `RestApiId` and `ParentId`
+- Parameterized REST API naming with account ID, environment, and region
 - Automated semantic versioning and releases
 - AWS OIDC authentication for CI/CD deployments
 
 ## Project Structure
 
 ```text
-templates/
-├── s3-bucket.yaml                # Nested template: S3 bucket creation
-└── s3-bucket-policy.yaml         # Nested template: S3 bucket policy
-
-parameters/
-├── dev.json                       # Parameters for development environment
-├── staging.json                   # Parameters for staging environment
-├── prod.json                      # Parameters for production environment
-├── policy-dev.json                # Bucket policy parameters (development)
-├── policy-staging.json            # Bucket policy parameters (staging)
-└── policy-prod.json               # Bucket policy parameters (production)
+cloudformation/
+├── template.yaml                  # Nested template: REST API and path resource
+├── parameters.json                # Sample parameter values
+└── stack-config.json              # Stack name, template file, parameter file (used by CI)
 
 .github/workflows/
-├── ci.yaml                        # Validates, deploys, and cleans up templates
+├── ci.yaml                        # Builds and deploys the template on cloudformation/ changes
 ├── release.yaml                   # Semantic release on push to main
-└── create-branch.yaml             # Auto-create feature branches from issues
+├── create-branch.yaml             # Auto-create feature branches from issues
+└── ...
+
+.env/
+└── environments.yaml              # Environment-to-GitHub-environment mapping and regions
 
 scripts/plugins/
 ├── release.config.js              # Semantic-release configuration
 └── (other release plugins)        # Custom commit analysis, notes generation
-
-.claude/
-├── settings.json                  # Claude Code workspace settings
-└── settings.local.json            # Local overrides
 
 .devcontainer/
 └── devcontainer.json              # Dev container setup (Node.js 20)
@@ -76,21 +69,25 @@ Select `feat`, `fix`, or `chore` type. Only `feat` and `fix` trigger releases.
 
 ### Nested Stack Pattern
 
-This repo provides **nested stack templates** — templates that are referenced from parent/root CloudFormation stacks via `TemplateURL`. The templates are self-contained and export outputs for cross-stack references.
+This repo provides a **nested stack template** that is referenced from parent/root CloudFormation stacks via `TemplateURL`. The template is self-contained.
 
 - **Parent stack** calls: `AWS::CloudFormation::Stack` with `TemplateURL` pointing to S3
-- **Nested templates** output values via `Outputs` section with `Export`
+- **Nested template** exposes values via the `Outputs` section
 - Parent retrieves outputs via `!GetAtt NestedStack.Outputs.OutputKey`
 
-### Bucket Naming Convention
+Note: the outputs in `cloudformation/template.yaml` do not use `Export`. Parents must read them through `!GetAtt`.
 
-Bucket names follow a deterministic pattern driven by parameters:
+### REST API Naming Convention
+
+A CI build (non-empty `CiSuffix`) names the REST API from parameters:
 
 ```bash
-{ProjectName}-{BucketBaseName}-{AccountId}-{Environment}-{Region}[-{CiSuffix}]
+{ProjectName}-api-{AccountId}-{Environment}-{Region}-{CiSuffix}
 ```
 
-Example: `myproject-cfn-bucket-123456789012-devl-us-east-1`
+Example: `cfn-nested-api-123456789012-devl-us-east-1-12345`
+
+Non-CI runs create no REST API and use the `RestApiId` parameter instead.
 
 This ensures:
 
@@ -98,73 +95,59 @@ This ensures:
 - Environment isolation
 - Consistent naming for infrastructure automation
 
-### Parameter-Driven Configuration
-
-Both templates accept parameters to support:
-
-- **Standalone mode**: Direct bucket name provided
-- **Integrated mode**: Bucket name constructed from project/environment parameters
-
-The `s3-bucket-policy.yaml` template checks if `BucketName` is provided; if not, it constructs the name using the same parameters as the bucket template.
-
 ## Key Files to Understand
 
-### `templates/s3-bucket.yaml`
+### `cloudformation/template.yaml`
 
-**Purpose:** Creates an S3 bucket with security defaults
+**Purpose:** Creates an API Gateway REST API and a path resource under its root.
 
 **Key inputs:**
 
-- `ProjectName` (required): Project prefix
-- `BucketBaseName` (default: `cfn-bucket`): Base name component
-- `environment`: Environment label (devl, stag, prod)
-- `CiSuffix`: Optional suffix for CI/CD unique deployments
+- `ProjectName` (default `cfn-nested`): Project prefix
+- `PathPart` (default `orders`): Path segment created under the parent resource
+- `RestApiId` (default `""`): Existing REST API ID. Required when `CiSuffix` is empty
+- `ParentId` (default `""`): Parent resource ID, usually the REST API root. Required when `CiSuffix` is empty
+- `Environment` (default `devl`): `devl`, `test`, or `prod`
+- `CiSuffix` (default `""`): Non-empty marks a CI build (creates the REST API and appends the suffix to its name)
+
+**Rules:** `RequireExistingApiWhenNotCi` fails the stack if `RestApiId` or `ParentId` is empty when `CiSuffix` is empty.
+
+**Key resources:**
+
+- `RestApi` (`AWS::ApiGateway::RestApi`): Condition `IsCiBuild`. Tagged with `ProjectName` and `Environment`
+- `RestApiResource` (`AWS::ApiGateway::Resource`): Always created. `RestApiId` and `ParentId` are `!If [IsCiBuild, ...]`: the created API and its root for CI builds, otherwise the parameters. Named by `PathPart`
 
 **Key outputs:**
 
-- `S3BucketName`: Bucket name (exported for parent stack)
-- `S3BucketArn`: Bucket ARN
+- `RestApiId`: Created or provided REST API ID
+- `RestApiRootResourceId`: Parent resource ID the path resource was created under
 
-**Features:**
+**Not yet created:** methods, child resources, deployments, and stages.
 
-- Versioning enabled by default
-- Public access blocking enabled (all 4 options)
-- Conditional naming: different bucket name with/without CI suffix
+### `cloudformation/parameters.json` and `cloudformation/stack-config.json`
 
-### `templates/s3-bucket-policy.yaml`
-
-**Purpose:** Applies an optional S3 bucket policy for encryption and transport security
-
-**Key inputs:** Same as bucket template, plus `BucketName` (standalone mode)
-
-**Behavior:**
-
-- If `BucketName` provided (non-empty), use it directly
-- Otherwise, construct name from ProjectName/BucketBaseName/environment/CiSuffix
-- Enforces S3 encryption on PutObject
-- Enforces HTTPS-only transport
+- `stack-config.json` names the stack, template file, and parameter file that CI uses.
+- `parameters.json` holds sample values. Its keys do not all match the template's parameters, and it is not in the `[{"ParameterKey": ..., "ParameterValue": ...}]` format that `--parameters file://` expects. Use `--parameter-overrides` with `aws cloudformation deploy` instead.
 
 ### `.github/workflows/ci.yaml`
 
 **Triggered on:**
 
-- Manual workflow_dispatch (anytime)
-- Pull requests (any branch)
-- Pushes to `feature/**` and `bug/**` branches
-
-**Path filter:** Only runs if changes to `templates/`, `parameters/`, or `.github/workflows/ci.yaml`
+- Manual `workflow_dispatch` (anytime)
+- Pull requests targeting `main` that change `cloudformation/**`
+- Pushes to `feature/**` and `bug/**` branches that change `cloudformation/**` or the workflow itself
 
 **Phases:**
 
-1. **Validation:** `aws cloudformation validate-template` on both templates
-2. **Deployment:** Creates CloudFormation stacks in CI environment
-3. **Cleanup:** Destroys stacks (policy stack first, then bucket) for ephemeral testing
+1. **Load config:** Reads `cloudformation/stack-config.json`
+2. **CI build:** Calls the reusable workflow `subhamay-bhattacharyya-gha/cfn-ci-build-reusable-wf` with environment `ci`
+3. **Changelog and release:** On `main` only
 
 **Environment setup:**
 
-- Reads config from GitHub environment variables: `AWS_REGION`, `AWS_ACCOUNT_ID`, `OIDC_ROLE_NAME`, `CFN_TEMPLATES_S3_BUCKET`
-- Uses AWS OIDC for keyless authentication via `aws-actions/configure-aws-credentials`
+- Uses AWS OIDC for keyless authentication (`id-token: write`)
 - Requires GitHub environment `ci` with OIDC trust configured
+- `.env/environments.yaml` maps `ci` and `devl` to the `AWS-CFN-TEMPLATES` GitHub environment and lists `us-east-1` as the region
 
 ### `.github/workflows/release.yaml`
 
@@ -190,40 +173,28 @@ The `s3-bucket-policy.yaml` template checks if `BucketName` is provided; if not,
 **Manual template validation:**
 
 ```bash
-aws cloudformation validate-template --template-body file://templates/s3-bucket.yaml
-aws cloudformation validate-template --template-body file://templates/s3-bucket-policy.yaml
+aws cloudformation validate-template --template-body file://cloudformation/template.yaml
 ```
 
 **Manual stack deployment:**
 
 ```bash
-# Deploy bucket to dev environment
 aws cloudformation deploy \
-  --template-file templates/s3-bucket.yaml \
-  --stack-name my-stack-dev \
-  --parameter-overrides file://parameters/dev.json \
-  --region us-east-1
-
-# Deploy policy after bucket is created
-aws cloudformation deploy \
-  --template-file templates/s3-bucket-policy.yaml \
-  --stack-name my-policy-dev \
-  --parameter-overrides file://parameters/policy-dev.json \
+  --template-file cloudformation/template.yaml \
+  --stack-name cfn-nested-aws-api-gateway-resource-stack \
+  --parameter-overrides ProjectName=my-project Environment=devl \
+    RestApiId=abc123def4 ParentId=xyz789root \
   --region us-east-1
 ```
 
-The CI workflow (ci.yaml) runs this full cycle automatically on PR, then cleans up.
+For a CI build, pass `CiSuffix=<suffix>` instead of `RestApiId` and `ParentId`.
 
 ## AWS Credentials & Environment Variables
 
-**GitHub environment variables required in `ci` environment:**
+**GitHub environment `ci` requires:**
 
-- `AWS_REGION`: CloudFormation deployment region
-- `AWS_ACCOUNT_ID`: AWS account to deploy into
-- `OIDC_ROLE_NAME`: IAM role name for OIDC trust (uses `arn:aws:iam::{ACCOUNT_ID}:role/{ROLE_NAME}`)
-- `CFN_TEMPLATES_S3_BUCKET`: S3 bucket where templates are stored
-
-**OIDC setup:** The CI workflow uses AWS OIDC for keyless auth. The GitHub OIDC provider must trust the specified role.
+- An OIDC role that the GitHub OIDC provider trusts for this repository
+- Region `us-east-1` (see `.env/environments.yaml`)
 
 ## Conventional Commits & Release Flow
 
@@ -242,13 +213,13 @@ Commit types:
 
 Only commits to `main` trigger releases. Feature branches use this format but releases happen on merge to main.
 
-## When Modifying Templates
+## When Modifying the Template
 
-1. **Edit the template YAML** in `templates/`
-2. **Update parameter files** in `parameters/` if new parameters added
+1. **Edit `cloudformation/template.yaml`**
+2. **Update `cloudformation/parameters.json`** if parameters are added or renamed
 3. **Test locally** with `aws cloudformation validate-template`
-4. **Create a PR** with conventional commit message (e.g., `feat: add encryption key parameter`)
-5. **CI validates and deploys** to dev environment automatically
+4. **Create a PR** with a conventional commit message (e.g., `feat: add stage resource parameter`)
+5. **CI validates and deploys** the template automatically
 6. **Merge to main** → release workflow creates version tag and GitHub release
 
 ## Dev Container
@@ -263,4 +234,3 @@ Use via VS Code: `code --remote-container-url <repo-url>`
 ## Current Branch
 
 Main branch is the release branch. Feature work branches from here and merges back via PR. Branch naming follows: `{type}/CFN-{issue-number}-{slug}` (e.g., `feature/CFN-42-add-encryption`).
-

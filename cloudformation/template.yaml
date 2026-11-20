@@ -1,137 +1,137 @@
 AWSTemplateFormatVersion: '2010-09-09'
 
-Description: 'Root CloudFormation template that invokes a nested S3 bucket stack'
+Description: 'Nested CloudFormation template to create an API Gateway REST API resource'
 
 Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
       - Label:
-          default: "Nested Stack Configuration"
-        Parameters:
-          - NestedStacksS3BucketName
-      - Label:
-          default: "Common Bucket Configuration"
+          default: "Common Configuration"
         Parameters:
           - ProjectName
           - Environment
       - Label:
-          default: "Bucket Configuration"
+          default: "API Configuration"
         Parameters:
-          - BucketBaseName
+          - PathPart
       - Label:
-          default: "Encryption Configuration"
+          default: "Existing API Configuration (non-CI only)"
         Parameters:
-          - KmsKey
-          - EnableBucketKey
+          - RestApiId
+          - ParentId
       - Label:
           default: "Advanced Configuration"
         Parameters:
           - CiSuffix
     ParameterLabels:
-      NestedStacksS3BucketName:
-        default: "S3 Bucket Name"
       ProjectName:
         default: "Project Name"
-      BucketBaseName:
-        default: "Bucket Base Name"
+      PathPart:
+        default: "Path Part"
+      RestApiId:
+        default: "REST API ID"
+      ParentId:
+        default: "Parent Resource ID"
       Environment:
         default: "Environment"
       CiSuffix:
         default: "CI Suffix"
-      KmsKey:
-        default: "KMS Key (ARN / Alias)"
-      EnableBucketKey:
-        default: "Enable S3 Bucket Key"
 
 Parameters:
-  NestedStacksS3BucketName:
-    Type: String
-    Default: "subhamay-cfn-templates-bucket-270453428528-us-east-1"
-    Description: "S3 bucket name where the nested CloudFormation template is stored"
-    MinLength: 3
-    MaxLength: 63
-    AllowedPattern: "^[a-z0-9][a-z0-9.-]*[a-z0-9]$"
-    ConstraintDescription: "S3 bucket name must be 3-63 characters, start and end with lowercase letter or number, and can contain hyphens and dots"
-
   ProjectName:
     Type: String
-    Default: "ztc-etl"
-    Description: "Project name to use as a bucket prefix"
+    Default: "cfn-nested"
+    Description: "Project name to use as a name prefix"
     MinLength: 1
     MaxLength: 20
     AllowedPattern: "^[a-z0-9-]+$"
     ConstraintDescription: "Project name must be lowercase letters, numbers, and hyphens only"
 
-  BucketBaseName:
+  PathPart:
     Type: String
-    Default: "csv-raw-data"
+    Default: "orders"
     MinLength: 1
-    MaxLength: 20
-    AllowedPattern: "^[a-z0-9.-]+$"
-    ConstraintDescription: "Bucket base name must be 1-20 characters and can only contain lowercase letters, numbers, hyphens, and dots"
-    Description: Base name for the S3 bucket (account ID, environment, and region will be appended)
+    MaxLength: 256
+    AllowedPattern: "^[a-zA-Z0-9._-]+$"
+    ConstraintDescription: "Path part must be 1-256 characters and can only contain letters, numbers, periods, underscores, and hyphens"
+    Description: "Path segment created under the REST API root resource"
 
-  KmsKey:
+  RestApiId:
     Type: String
     Default: ""
-    AllowedPattern: "^(alias/[a-zA-Z0-9_-]+|arn:aws:kms:[a-z0-9-]+:[0-9]+:key/[a-zA-Z0-9-]+|[a-zA-Z0-9_-]+)?$"
-    ConstraintDescription: "KMS Key can be a key name (e.g., my-key, auto-converted to alias/my-key), a KMS key alias (e.g., alias/my-key), or a full KMS key ARN (e.g., arn:aws:kms:region:account:key/key-id), or leave empty for no KMS encryption"
-    Description: "Optional KMS Key for S3 bucket encryption. Accepts: key name (my-key), alias (alias/my-key), or ARN (arn:aws:kms:region:account:key/key-id). Plain key names are auto-converted to aliases."
+    Description: "ID of an existing API Gateway REST API. Required when CiSuffix is empty (not a CI build). Ignored for CI builds."
 
-  EnableBucketKey:
+  ParentId:
     Type: String
-    Default: "false"
-    AllowedValues:
-      - "true"
-      - "false"
-    Description: "Enable S3 Bucket Key for KMS encryption cost optimization (only applicable when KmsKey is provided)"
+    Default: ""
+    Description: "ID of the parent resource (usually the root resource ID of the existing REST API) under which PathPart is created. Required when CiSuffix is empty (not a CI build). Ignored for CI builds."
 
   Environment:
     Type: String
-    Default: devl
-    Description: "Deployment environment for the S3 bucket"
+    Default: "devl"
+    AllowedValues:
+      - "devl"
+      - "test"
+      - "prod"
+    Description: "Deployment environment"
 
   CiSuffix:
     Type: String
     Default: ""
-    Description: "Optional CI suffix to append to the bucket name"
+    Description: "CI suffix appended to the REST API name. A non-empty value marks a CI build pipeline, which creates the REST API. Leave empty to use RestApiId and ParentId instead."
+
+Rules:
+  RequireExistingApiWhenNotCi:
+    RuleCondition: !Equals [!Ref CiSuffix, ""]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref RestApiId, ""]]
+        AssertDescription: "RestApiId is required when CiSuffix is empty"
+      - Assert: !Not [!Equals [!Ref ParentId, ""]]
+        AssertDescription: "ParentId is required when CiSuffix is empty"
+
+Conditions:
+  IsCiBuild: !Not [!Equals [!Ref CiSuffix, ""]]
 
 Resources:
-  S3BucketNestedStack:
-    Type: AWS::CloudFormation::Stack
-    DeletionPolicy: Delete
-    UpdateReplacePolicy: Delete
+  RestApi:
+    Type: AWS::ApiGateway::RestApi
+    Condition: IsCiBuild
     Metadata:
       com.aws.cloudformation.Context:
-        why: "Invokes the nested S3 bucket CloudFormation template to create a versioned, encrypted S3 bucket with public access blocking and optional logging/website configuration"
+        why: "API Gateway REST API created by the CI build pipeline. Methods, resources, and a deployment are not yet defined."
         must:
-          - "Nested template must be accessible at the specified S3 location"
-          - "IAM principal must have s3:GetObject permission on the template S3 bucket"
-          - "CloudFormation service must have permission to assume the required IAM role for S3 and KMS operations"
+          - "Must tag the API with ProjectName and Environment for cost allocation and ownership tracking"
     Properties:
-      TemplateURL: !Sub https://${NestedStacksS3BucketName}.s3.us-east-1.amazonaws.com/cfn-nested-aws-s3-bucket/template.yaml
-      Parameters:
-        ProjectName: !Ref ProjectName
-        BucketBaseName: !Ref BucketBaseName
-        KmsKey: !Ref KmsKey
-        EnableBucketKey: !Ref EnableBucketKey
-        Environment: !Ref Environment
-        CiSuffix: !Ref CiSuffix
+      Name: !Sub '${ProjectName}-api-${AWS::AccountId}-${Environment}-${AWS::Region}-${CiSuffix}'
+      Description: "API Description"
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
       Tags:
-        - Key: ManagedBy
-          Value: RootStack
-        - Key: NestedStackPurpose
-          Value: S3BucketCreation
+        - Key: ProjectName
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  RestApiResource:
+    Type: AWS::ApiGateway::Resource
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: "Adds the path segment set by PathPart (default /orders) under the REST API root. Endpoints are attached to this resource as child resources and methods."
+        trust:
+          src: infer
+          conf: low
+          note: "rationale not documented"
+    Properties:
+      RestApiId: !If [IsCiBuild, !Ref RestApi, !Ref RestApiId]
+      ParentId: !If [IsCiBuild, !GetAtt RestApi.RootResourceId, !Ref ParentId]
+      PathPart: !Ref PathPart
 
 Outputs:
-  NestedStackId:
-    Description: "ID of the nested stack"
-    Value: !Ref S3BucketNestedStack
+  RestApiId:
+    Description: "ID of the API Gateway REST API (created or provided)"
+    Value: !If [IsCiBuild, !Ref RestApi, !Ref RestApiId]
 
-  S3BucketName:
-    Description: "Name of the S3 bucket created by the nested stack"
-    Value: !GetAtt S3BucketNestedStack.Outputs.S3BucketName
-
-  S3BucketArn:
-    Description: "ARN of the S3 bucket created by the nested stack"
-    Value: !GetAtt S3BucketNestedStack.Outputs.S3BucketArn
+  RestApiRootResourceId:
+    Description: "Parent resource ID the path resource was created under (root resource ID for CI builds)"
+    Value: !If [IsCiBuild, !GetAtt RestApi.RootResourceId, !Ref ParentId]
