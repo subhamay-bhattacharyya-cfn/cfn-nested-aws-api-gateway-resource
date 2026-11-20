@@ -74,6 +74,7 @@ Example: `cfn-nested-api-123456789012-devl-us-east-1-12345`
 | --- | --- |
 | `RestApiId` | ID of the REST API: created by a CI build, otherwise the `RestApiId` parameter |
 | `RestApiRootResourceId` | Parent resource ID the path resource was created under: the root resource for CI builds, otherwise the `ParentId` parameter |
+| `RestApiResourceId` | ID of the path resource created by `PathPart` |
 
 ## Usage
 

@@ -121,6 +121,7 @@ This ensures:
 
 - `RestApiId`: Created or provided REST API ID
 - `RestApiRootResourceId`: Parent resource ID the path resource was created under
+- `RestApiResourceId`: ID of the path resource created by `PathPart`
 
 **Not yet created:** methods, child resources, deployments, and stages.
 

@@ -132,6 +132,12 @@ Outputs:
     Description: "ID of the API Gateway REST API (created or provided)"
     Value: !If [IsCiBuild, !Ref RestApi, !Ref RestApiId]
 
+  RestApiResourceId:
+    Description: "ID of the path resource created by PathPart"
+    Value: !Ref RestApiResource
+    
   RestApiRootResourceId:
     Description: "Parent resource ID the path resource was created under (root resource ID for CI builds)"
     Value: !If [IsCiBuild, !GetAtt RestApi.RootResourceId, !Ref ParentId]
+
+
